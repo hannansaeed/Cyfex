@@ -17,9 +17,11 @@ import com.example.data.db.entity.*
         ScanEntity::class,
         BaselineEntity::class,
         FeatureVectorEntity::class,
-        RuleResultEntity::class
+        RuleResultEntity::class,
+        SensorAccessEventEntity::class,
+        MonitoringSessionEntity::class
     ],
-    version = 1,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -30,6 +32,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun scanDao(): ScanDao
     abstract fun baselineDao(): BaselineDao
     abstract fun ruleResultDao(): RuleResultDao
+    abstract fun sensorAccessDao(): SensorAccessDao
+    abstract fun monitoringSessionDao(): MonitoringSessionDao
 
     companion object {
         @Volatile

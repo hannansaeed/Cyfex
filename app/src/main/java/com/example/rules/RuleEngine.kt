@@ -29,14 +29,14 @@ interface Rule {
 
 object AppSecurityWhitelist {
     private val trustedPrefixes = listOf(
-        // Operating System & System Services
+        // Operating System & System Frameworks
         "android",
         "com.android.",
         "com.google.",
         "com.qualcomm.",
         "com.mediatek.",
 
-        // Web Browsers (including Tor, UC, Chrome, Brave, Firefox, etc.)
+        // Web Browsers (Tor, UC, Chrome, Brave, Firefox, Opera, DuckDuckGo, etc.)
         "org.mozilla.",
         "com.brave.",
         "com.opera.",
@@ -49,10 +49,10 @@ object AppSecurityWhitelist {
         "com.sec.android.app.sbrowser",
         "com.vivaldi.",
         "com.cloudmosa.puffin",
-        "com.aloha."
-        "com.openai.",
+        "com.aloha.",
 
-        // Social Media, Video & Communication (TikTok, Instagram, Meta, etc.)
+        // AI, Social, Media & Productivity
+        "com.openai.",
         "com.zhiliaoapp.musically",
         "com.ss.android.ugc.",
         "com.bytedance.",
@@ -76,29 +76,29 @@ object AppSecurityWhitelist {
         "jp.naver.line.",
         "com.slack",
 
-        // Photo, Video Editors & Creative Tools ("Edits" apps)
+        // Photo, Video & Creative Tools ("Edits" apps)
         "com.lemon.lvoverseas",   // CapCut
-        "com.lemon.easyedit",     // CapCut variations
+        "com.lemon.easyedit",
         "com.capcut.",
         "com.camerasideas.instashot", // InShot
-        "com.frontrow.vlog",      // VN Video Editor
-        "com.nexstreaming.app.kinemasterfree", // KineMaster
+        "com.frontrow.vlog",      // VN
+        "com.nexstreaming.app.kinemasterfree",
         "com.kinemaster.",
-        "com.picsart.studio",     // PicsArt
-        "com.canva.editor",       // Canva
-        "com.adobe.",             // Lightroom, Photoshop, Premiere Rush, Express
-        "com.vsco.cam",           // VSCO
-        "com.cyberlink.",         // PowerDirector
-        "com.alightcreative.motion", // Alight Motion
-        "com.niksoftware.snapseed",  // Snapseed
-        "com.wondershare.",       // Filmora
-        "com.bigwinepot.nwdn.international", // Remini
+        "com.picsart.studio",
+        "com.canva.editor",
+        "com.adobe.",
+        "com.vsco.cam",
+        "com.cyberlink.",
+        "com.alightcreative.motion",
+        "com.niksoftware.snapseed",
+        "com.wondershare.",
+        "com.bigwinepot.nwdn.international",
         "com.meitu.",
         "com.linecorp.b612",
         "com.cyberlink.youcammakeup",
         "io.faceapp",
 
-        // Streaming, Media Players & Music
+        // Streaming & Music
         "com.spotify.",
         "com.netflix.",
         "com.amazon.",
@@ -111,14 +111,15 @@ object AppSecurityWhitelist {
         "org.videolan.vlc",
         "com.mxtech.videoplayer",
 
-        // E-Commerce, Utilities & Cloud
-        "com.alibaba.",
-        "com.taobao.",
-        "com.aliexpress.",
-        "com.ebay.",
-        "com.shopee.",
-        "com.lazada.",
-        "com.flipkart.",
+        // Utilities & Banking
+        "com.paypal.",
+        "com.squareup.cash",
+        "com.chase.",
+        "com.bankofamerica.",
+        "com.wellsfargo.",
+        "com.revolut.",
+        "com.binance.",
+        "com.coinbase.",
         "com.dropbox.",
         "com.evernote",
         "com.notion.",
@@ -130,17 +131,7 @@ object AppSecurityWhitelist {
         "com.truecaller",
         "com.duolingo",
 
-        // Banking & Payment Gateways
-        "com.paypal.",
-        "com.squareup.cash",
-        "com.chase.",
-        "com.bankofamerica.",
-        "com.wellsfargo.",
-        "com.revolut.",
-        "com.binance.",
-        "com.coinbase.",
-
-        // Major OEMs & Device Manufacturers
+        // OEMs
         "com.samsung.",
         "com.sec.",
         "com.xiaomi.",
@@ -165,23 +156,14 @@ object AppSecurityWhitelist {
         "powerdirector", "ucbrowser", "ucmobile", "torbrowser", "torproject", "orbot", "chrome",
         "firefox", "mozilla", "opera", "brave", "duckduckgo", "spotify", "netflix", "youtube",
         "google", "microsoft", "adobe", "samsung", "xiaomi", "huawei", "oppo", "vivo", "motorola",
-        "vlc", "mxplayer", "paypal", "amazon", "aliexpress", "truecaller"
+        "vlc", "mxplayer", "paypal", "amazon", "aliexpress", "truecaller", "openai", "chatgpt"
     )
 
     fun isWellKnownTrustedApp(packageName: String, appName: String = ""): Boolean {
         val p = packageName.lowercase()
         val a = appName.lowercase()
-
-        // 1. Direct prefix match
-        if (trustedPrefixes.any { p.startsWith(it) || p == it }) {
-            return true
-        }
-
-        // 2. Keyword presence in package name or app label
-        if (trustedKeywords.any { p.contains(it) || a.contains(it) }) {
-            return true
-        }
-
+        if (trustedPrefixes.any { p.startsWith(it) || p == it }) return true
+        if (trustedKeywords.any { p.contains(it) || a.contains(it) }) return true
         return false
     }
 }
@@ -197,17 +179,19 @@ class PersistentBackgroundRule : Rule {
         processes: List<ProcessRecord>,
         network: List<NetworkConnectionRecord>
     ): RuleEvaluationResult {
+        // System apps or standard foreground-serviced apps are normal
         if (app.isSystemApp || AppSecurityWhitelist.isWellKnownTrustedApp(app.packageName, app.appName)) {
-            return cleanResult("Verified legitimate publisher background service.")
+            return cleanResult("Verified legitimate publisher background architecture.")
         }
 
-        val isExplicitMiner = app.packageName.contains("miner", ignoreCase = true)
         val appProcesses = processes.filter { it.packageName == app.packageName }
+        val isExplicitMiner = app.packageName.contains("miner", ignoreCase = true)
 
+        // Strict malicious criteria: Sideloaded unverified app with boot persistence, no foreground notification, running sustained high CPU (>60%)
         val isPersistingSilently = appProcesses.isNotEmpty() &&
                 app.requestedPermissions.contains("android.permission.RECEIVE_BOOT_COMPLETED") &&
                 !app.requestedPermissions.contains("android.permission.FOREGROUND_SERVICE") &&
-                appProcesses.any { it.cpuPercent > 50.0 }
+                appProcesses.any { it.cpuPercent > 60.0 }
 
         val triggered = isExplicitMiner || isPersistingSilently
 
@@ -258,6 +242,7 @@ class AbnormalResourceRule : Rule {
         val isExplicitMiner = app.packageName.contains("miner", ignoreCase = true) ||
                 appProcesses.any { it.processName.contains("miner", ignoreCase = true) }
 
+        // Require severe sustained CPU spike (>75%) or explicit miner signature
         val triggered = (maxCpu > 75.0) || (isExplicitMiner && maxCpu > 20.0)
 
         return RuleEvaluationResult(
@@ -298,9 +283,10 @@ class SuspiciousComponentRule : Rule {
         network: List<NetworkConnectionRecord>
     ): RuleEvaluationResult {
         if (app.isSystemApp || AppSecurityWhitelist.isWellKnownTrustedApp(app.packageName, app.appName)) {
-            return cleanResult("Component architecture conforms to verified publisher design.")
+            return cleanResult("Component architecture conforms to platform design.")
         }
 
+        // Only trigger on apps that expose 6+ internal exported services without permissions AND bind accessibility
         val exportedServices = app.components.exportedServices
         val triggered = exportedServices >= 6 && app.requestedPermissions.contains("android.permission.BIND_ACCESSIBILITY_SERVICE")
 
@@ -377,11 +363,10 @@ class AbnormalNetworkRule : Rule {
 }
 
 /**
- * Enhanced Dynamic Code Loading (DCL) Rule with Weighted Risk Scoring:
- * - File Magic Header Verification (dex\n or PK\x03\x04)
- * - Shannon Entropy Analysis (Flagging custom packing > 7.4)
- * - ClassLoader Context & Storage Path Analysis (/sdcard/ vs private storage)
- * - Broad whitelisting for verified apps, creative tools & modular architectures
+ * Enhanced Dynamic Code Loading (DCL) Rule with Context & Origin Awareness:
+ * - Distinguishes Embedded APK DEX / Multidex (Clean, normal Android architecture)
+ * - Identifies External Writable Storage Loading (/sdcard/) as genuine threat
+ * - Core Platform, Google, Samsung & Whitelisted packages are never falsely flagged
  */
 class DynamicCodeLoadingRule : Rule {
     override val id = "RULE-005"
@@ -396,30 +381,43 @@ class DynamicCodeLoadingRule : Rule {
     ): RuleEvaluationResult {
         val static = app.staticMetrics
 
-        // 1. Whitelist Check: If legitimate publisher, creative tool or browser, treat as clean
-        if (app.isSystemApp || AppSecurityWhitelist.isWellKnownTrustedApp(app.packageName, app.appName)) {
-            return cleanResult("Verified legitimate ecosystem application (Google Play Feature Delivery / dynamic module framework).")
+        // Core System & Platform Services, Google packages, and Whitelisted applications
+        if (app.isSystemApp ||
+            app.packageName == "android" ||
+            app.packageName.startsWith("com.android.") ||
+            app.packageName.startsWith("com.google.") ||
+            app.packageName.startsWith("com.qualcomm.") ||
+            app.packageName.startsWith("com.sec.") ||
+            app.packageName.startsWith("com.samsung.") ||
+            AppSecurityWhitelist.isWellKnownTrustedApp(app.packageName, app.appName)) {
+            return cleanResult(
+                reason = "Verified Platform / Trusted Ecosystem Architecture.",
+                origin = static.executableOrigin,
+                dexCount = static.dexCount
+            )
         }
 
-        // 2. High-Confidence Malicious DCL Criteria:
-        // - Missing/corrupt DEX magic bytes (custom XOR/packer)
-        // - High Shannon entropy (> 7.4) indicating encrypted payload
-        // - Loading from shared external storage (/sdcard/)
-        // - Explicit simulated dropper package
+        // Legitimate Multidex (e.g., classes2.dex, classes3.dex) and valid embedded DEX are standard
+        if (static.dclMagicHeaderValid && !static.dclExternalStorageRef && static.dclEntropyScore < 7.6) {
+            return cleanResult(
+                reason = "Standard valid embedded DEX / Multidex architecture (${static.dexCount} DEX files).",
+                origin = static.executableOrigin,
+                dexCount = static.dexCount
+            )
+        }
+
+        // Genuine threat condition: Loading from external writable storage (/sdcard/) OR corrupted encrypted payload
         val isExplicitDropper = app.packageName.contains("flashtorch")
-        val isMaliciousDcl = (static.dclRiskScore >= 50) ||
-                (!static.dclMagicHeaderValid && static.hasDynamicCodeLoadingIndicators) ||
-                (static.dclEntropyScore > 7.4 && static.hasDynamicCodeLoadingIndicators) ||
-                static.dclExternalStorageRef ||
+        val isMaliciousDcl = static.dclExternalStorageRef ||
+                (!static.dclMagicHeaderValid && static.dclEntropyScore > 7.6) ||
                 isExplicitDropper
 
         if (isMaliciousDcl) {
-            val severity = if (static.dclEntropyScore > 7.4 || !static.dclMagicHeaderValid) RiskLevel.CRITICAL else RiskLevel.HIGH
+            val severity = if (static.dclEntropyScore > 7.6 || !static.dclMagicHeaderValid) RiskLevel.CRITICAL else RiskLevel.HIGH
             val evidenceStr = buildString {
-                append("DCL Risk Score: ${static.dclRiskScore}/100. ")
+                if (static.dclExternalStorageRef) append("ClassLoader references external writable storage (/sdcard/). ")
                 if (!static.dclMagicHeaderValid) append("Magic Header: Corrupt/Invalid. ")
-                if (static.dclEntropyScore > 7.0) append("Entropy: ${static.dclEntropyScore}/8.00 (Encrypted). ")
-                if (static.dclExternalStorageRef) append("Path: External shared storage. ")
+                if (static.dclEntropyScore > 7.4) append("Entropy: ${static.dclEntropyScore}/8.00 (Encrypted). ")
                 if (static.dclDetails.isNotEmpty()) append("Details: ${static.dclDetails}")
             }
 
@@ -429,25 +427,29 @@ class DynamicCodeLoadingRule : Rule {
                 triggered = true,
                 severity = severity,
                 scoreImpact = scoreWeight,
-                title = "Encrypted Dynamic Code Payload",
-                description = "Detected packed or encrypted secondary executable code container that bypasses Android verification.",
+                title = "Untrusted Dynamic Executable Origin",
+                description = "Detected code execution originating from external shared storage or an unverified encrypted payload container.",
                 evidence = evidenceStr,
-                remediation = "Quarantine or uninstall the package immediately. Applications utilizing unverified dynamic code execution pose security risks."
+                remediation = "Quarantine or uninstall the package immediately. Dynamic code loaded from writable directories bypasses Android security boundaries."
             )
         }
 
-        return cleanResult("No suspicious encrypted payloads or unauthorized ClassLoader hooks detected.")
+        return cleanResult(
+            reason = "No suspicious external dynamic code hooks detected.",
+            origin = static.executableOrigin,
+            dexCount = static.dexCount
+        )
     }
 
-    private fun cleanResult(reason: String) = RuleEvaluationResult(
+    private fun cleanResult(reason: String, origin: String = "Embedded in APK", dexCount: Int = 1) = RuleEvaluationResult(
         ruleId = id,
         ruleName = name,
         triggered = false,
         severity = baseSeverity,
         scoreImpact = 0,
-        title = "Verified Clean Packaging",
+        title = "Verified Clean Code Origin",
         description = reason,
-        evidence = "Magic: Valid (dex\\n), Entropy: Normal (${"%.2f".format(5.8)}), Storage: Internal",
+        evidence = "Origin: $origin, Magic: Valid, Multidex: $dexCount files",
         remediation = "No action required."
     )
 }

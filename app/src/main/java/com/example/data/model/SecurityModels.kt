@@ -1,5 +1,9 @@
 package com.example.data.model
 
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
 enum class RiskLevel(val label: String, val scoreThreshold: Int) {
     SAFE("Safe", 0),
     LOW("Low Risk", 20),
@@ -17,6 +21,59 @@ enum class RiskLevel(val label: String, val scoreThreshold: Int) {
         }
     }
 }
+
+enum class ConfidenceLevel(val label: String) {
+    HIGH("High Confidence"),
+    MEDIUM("Medium Confidence"),
+    LOW("Low Confidence")
+}
+
+enum class SignalCategory(val displayName: String) {
+    APK_STRUCTURE("APK Structure"),
+    CODE_ANALYSIS("DEX & Code Analysis"),
+    INTEGRITY_SIGNATURE("Integrity & Signature"),
+    RUNTIME_BEHAVIOR("Runtime Behavior"),
+    NETWORK_BEHAVIOR("Network Behavior"),
+    DYNAMIC_CODE_LOADING("Dynamic Code Loading"),
+    REPUTATION_CORRELATION("Reputation & Heuristics")
+}
+
+data class ThreatSignal(
+    val category: SignalCategory,
+    val name: String,
+    val evidence: String,
+    val weight: Int,
+    val isViolation: Boolean,
+    val isInformational: Boolean = false,
+    val description: String = ""
+)
+
+data class ScoringStep(
+    val stepNumber: Int,
+    val phase: String,
+    val finding: String,
+    val weightDelta: Int,
+    val runningScore: Int,
+    val note: String
+)
+
+data class ComprehensiveRiskEvaluation(
+    val totalScore: Int,
+    val riskLevel: RiskLevel,
+    val confidenceLevel: ConfidenceLevel,
+    val reasoning: String,
+    val signals: List<ThreatSignal>,
+    val scoringChain: List<ScoringStep>,
+    val executableOrigin: String,
+    val signerOrganization: String,
+    val categoryBreakdown: Map<SignalCategory, CategoryStatus>
+)
+
+data class CategoryStatus(
+    val statusText: String,
+    val isClean: Boolean,
+    val violationsCount: Int
+)
 
 data class DeviceTelemetryInfo(
     val deviceId: String,
@@ -64,6 +121,8 @@ data class AppStaticMetrics(
     val apkSizeMb: Double,
     val sha256Hash: String,
     val signingCertHash: String,
+    val signerSubject: String = "CN=Android, O=Developer",
+    val signerOrganization: String = "Verified Developer",
     val dexCount: Int,
     val nativeLibsCount: Int,
     val nativeLibNames: List<String> = emptyList(),
@@ -74,12 +133,14 @@ data class AppStaticMetrics(
     val hasReflectionIndicators: Boolean = false,
     val hasSuspiciousUrls: Boolean = false,
     val hasObfuscationMarkers: Boolean = false,
+    val obfuscationType: String = "R8/ProGuard Standard",
     val dclRiskScore: Int = 0,
     val dclMagicHeaderValid: Boolean = true,
     val dclEntropyScore: Double = 0.0,
     val dclExternalStorageRef: Boolean = false,
     val dclIsEncryptedOrPacked: Boolean = false,
-    val dclDetails: String = ""
+    val dclDetails: String = "",
+    val executableOrigin: String = "Embedded in APK"
 )
 
 data class AppSecurityTelemetry(
@@ -91,6 +152,7 @@ data class AppSecurityTelemetry(
     val isSystemApp: Boolean,
     val installTime: Long,
     val updateTime: Long,
+    val firstSeenTime: Long = installTime,
     val staticMetrics: AppStaticMetrics,
     val components: AppComponentInfo,
     val requestedPermissions: List<String>,
@@ -98,13 +160,41 @@ data class AppSecurityTelemetry(
     val dangerousPermissions: List<String>,
     val overallRiskScore: Int,
     val riskLevel: RiskLevel,
+    val confidenceLevel: ConfidenceLevel = ConfidenceLevel.HIGH,
     val staticScore: Int,
     val runtimeScore: Int,
     val networkScore: Int,
     val anomalyScore: Double,
     val mlMaliciousProb: Double,
     val findingsCount: Int = 0,
-    val baselineDeviation: Double = 0.0
+    val baselineDeviation: Double = 0.0,
+    val reasoning: String = "",
+    val executableOrigin: String = "Embedded in APK"
+) {
+    val formattedInstallTime: String
+        get() = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault()).format(Date(installTime))
+
+    val formattedUpdateTime: String
+        get() = SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault()).format(Date(updateTime))
+}
+
+data class AppLiveUsage(
+    val packageName: String,
+    val appName: String,
+    val uid: Int,
+    val isSystemApp: Boolean,
+    val cpuPercent: Double,
+    val ramRssMb: Double,
+    val ramVszMb: Double,
+    val estimatedBatteryPerHour: Double, // Estimated %/hr drain
+    val networkSpeedKbps: Double,
+    val totalNetworkRxBytes: Long,
+    val totalNetworkTxBytes: Long,
+    val requestedPermissions: List<String>,
+    val grantedPermissions: List<String>,
+    val dangerousPermissions: List<String>,
+    val activePids: List<Int>,
+    val timestamp: Long = System.currentTimeMillis()
 )
 
 data class NetworkConnectionRecord(

@@ -105,3 +105,36 @@ interface RuleResultDao {
     @Query("SELECT * FROM rule_results ORDER BY timestamp DESC LIMIT 100")
     fun getRecentRuleResults(): Flow<List<RuleResultEntity>>
 }
+
+@Dao
+interface SensorAccessDao {
+    @Query("SELECT * FROM sensor_access_events ORDER BY timestamp DESC LIMIT 500")
+    fun getAllAccessEvents(): Flow<List<SensorAccessEventEntity>>
+
+    @Query("SELECT * FROM sensor_access_events WHERE timestamp >= :sinceTimestamp ORDER BY timestamp DESC")
+    fun getAccessEventsSince(sinceTimestamp: Long): Flow<List<SensorAccessEventEntity>>
+
+    @Query("SELECT * FROM sensor_access_events WHERE packageName = :packageName AND timestamp >= :sinceTimestamp ORDER BY timestamp DESC")
+    fun getAccessEventsForPackage(packageName: String, sinceTimestamp: Long): Flow<List<SensorAccessEventEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAccessEvent(event: SensorAccessEventEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAccessEvents(events: List<SensorAccessEventEntity>)
+
+    @Query("DELETE FROM sensor_access_events WHERE timestamp < :beforeTimestamp")
+    suspend fun deleteEventsOlderThan(beforeTimestamp: Long)
+
+    @Query("DELETE FROM sensor_access_events")
+    suspend fun clearAllAccessEvents()
+}
+
+@Dao
+interface MonitoringSessionDao {
+    @Query("SELECT * FROM monitoring_session WHERE id = 'active_session' LIMIT 1")
+    fun getActiveSession(): Flow<MonitoringSessionEntity?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveSession(session: MonitoringSessionEntity)
+}

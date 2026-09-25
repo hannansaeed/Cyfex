@@ -38,6 +38,8 @@ class SecurityRepository(
     val resourceCollector = ResourceCollector(shellExecutor)
     val networkCollector = NetworkCollector(shellExecutor)
     val eventCollector = EventCollector()
+    val usageCollector = UsageCollector(context, processCollector, permissionCollector)
+    val foregroundMonitorCollector = ForegroundMonitorCollector(context, shellExecutor, database.sensorAccessDao())
 
     val apkAnalyzer = ApkMetadataAnalyzer(context)
     val manifestAnalyzer = ManifestAnalyzer()
@@ -64,6 +66,13 @@ class SecurityRepository(
     val allScans: Flow<List<ScanEntity>> = database.scanDao().getAllScans()
     val latestScan: Flow<ScanEntity?> = database.scanDao().getLatestScan()
 
+    // Dynamic live resource usage flow updating every 1.5 seconds
+    val liveUsage: Flow<List<AppLiveUsage>> = usageCollector.pollLiveAppUsage()
+
+    // 24-Hour Hardware & Sensor Access Audit Log Flow
+    val sensorAccessEvents: Flow<List<SensorAccessEventEntity>> = database.sensorAccessDao().getAllAccessEvents()
+    val activeMonitoringSession: Flow<MonitoringSessionEntity?> = database.monitoringSessionDao().getActiveSession()
+
     init {
         // Trigger initial data load in background
         scope.launch {
@@ -71,6 +80,40 @@ class SecurityRepository(
                 performScan()
             }
         }
+    }
+
+    suspend fun populateSampleSensorAccessLogs() = withContext(Dispatchers.IO) {
+        foregroundMonitorCollector.seedInitial24HourTelemetryIfEmpty()
+    }
+
+    suspend fun clearSensorAccessEvents() = withContext(Dispatchers.IO) {
+        database.sensorAccessDao().clearAllAccessEvents()
+    }
+
+    suspend fun logSensorAccess(packageName: String, appName: String, resourceType: String, details: String) = withContext(Dispatchers.IO) {
+        database.sensorAccessDao().insertAccessEvent(
+            SensorAccessEventEntity(
+                packageName = packageName,
+                appName = appName,
+                resourceType = resourceType,
+                accessCount = 1,
+                details = details,
+                timestamp = System.currentTimeMillis()
+            )
+        )
+    }
+
+    suspend fun setMonitoringSessionState(isRunning: Boolean) = withContext(Dispatchers.IO) {
+        val current = database.monitoringSessionDao().getActiveSession().first()
+        val startTime = if (isRunning && (current == null || !current.isRunning)) System.currentTimeMillis() else current?.startTime ?: System.currentTimeMillis()
+        database.monitoringSessionDao().saveSession(
+            MonitoringSessionEntity(
+                id = "active_session",
+                startTime = startTime,
+                isRunning = isRunning,
+                totalEventsLogged = current?.totalEventsLogged ?: 0
+            )
+        )
     }
 
     fun getDeviceInfo(): DeviceTelemetryInfo {
@@ -179,7 +222,7 @@ class SecurityRepository(
             )
         }
 
-        // 2. Process application telemetry & rules
+        // 2. Process application telemetry, multi-signal correlation & rules
         targetPackages.forEachIndexed { index, pkgInfo ->
             val step = 0.45f + (index.toFloat() / targetPackages.size) * 0.45f
             _scanProgress.value = step
@@ -201,6 +244,9 @@ class SecurityRepository(
                 (it.flags and ApplicationInfo.FLAG_SYSTEM) != 0
             } ?: false
 
+            val installTime = pkgInfo.firstInstallTime
+            val updateTime = pkgInfo.lastUpdateTime
+
             val appTelemetry = AppSecurityTelemetry(
                 packageName = pkgInfo.packageName,
                 appName = pkgInfo.applicationInfo?.loadLabel(context.packageManager)?.toString() ?: pkgInfo.packageName,
@@ -208,8 +254,9 @@ class SecurityRepository(
                 versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pkgInfo.longVersionCode else 1L,
                 uid = pkgInfo.applicationInfo?.uid ?: 10000,
                 isSystemApp = isSystemApp,
-                installTime = pkgInfo.firstInstallTime,
-                updateTime = pkgInfo.lastUpdateTime,
+                installTime = installTime,
+                updateTime = updateTime,
+                firstSeenTime = installTime,
                 staticMetrics = staticMetrics,
                 components = components,
                 requestedPermissions = reqPerms,
@@ -217,13 +264,16 @@ class SecurityRepository(
                 dangerousPermissions = dangPerms,
                 overallRiskScore = 0,
                 riskLevel = RiskLevel.SAFE,
+                confidenceLevel = ConfidenceLevel.HIGH,
                 staticScore = 0,
                 runtimeScore = 0,
                 networkScore = 0,
                 anomalyScore = 0.0,
                 mlMaliciousProb = 0.0,
                 findingsCount = 0,
-                baselineDeviation = deviation
+                baselineDeviation = deviation,
+                reasoning = "",
+                executableOrigin = staticMetrics.executableOrigin
             )
 
             // ML Inference
@@ -233,20 +283,25 @@ class SecurityRepository(
             val ruleResults = ruleEngine.evaluateAll(appTelemetry, rawProcesses, activeConnections)
             val generatedFindings = ruleEngine.generateFindings(appTelemetry, ruleResults)
 
-            // Risk Correlation
-            val riskBreakdown = riskEngine.calculateRisk(
-                appTelemetry,
-                rawProcesses,
-                activeConnections,
-                ruleResults,
-                rfProb,
-                ifScore
+            // Context-Aware Multi-Signal Risk Correlation & Reasoning
+            val evaluation = riskEngine.evaluateApp(
+                app = appTelemetry,
+                processes = rawProcesses,
+                network = activeConnections,
+                ruleResults = ruleResults,
+                mlMaliciousProb = rfProb,
+                isolationForestAnomaly = ifScore
             )
 
-            if (riskBreakdown.riskLevel >= RiskLevel.HIGH) {
+            if (evaluation.riskLevel >= RiskLevel.HIGH) {
                 highRiskApps++
             }
-            totalRiskSum += riskBreakdown.totalScore
+            totalRiskSum += evaluation.totalScore
+
+            // Format Scoring Chain for Debug Mode
+            val scoringChainSummary = evaluation.scoringChain.joinToString("\n") { stepRecord ->
+                "#${stepRecord.stepNumber} [${stepRecord.phase}]: ${stepRecord.finding} (Δ ${if (stepRecord.weightDelta >= 0) "+${stepRecord.weightDelta}" else "${stepRecord.weightDelta}"}) → Score: ${stepRecord.runningScore} | ${stepRecord.note}"
+            }
 
             // Convert to Entity
             appEntities.add(
@@ -257,11 +312,22 @@ class SecurityRepository(
                     uid = appTelemetry.uid,
                     apkHash = staticMetrics.sha256Hash,
                     certHash = staticMetrics.signingCertHash,
-                    riskScore = riskBreakdown.totalScore,
-                    riskLevel = riskBreakdown.riskLevel.name,
+                    signerOrganization = staticMetrics.signerOrganization,
+                    executableOrigin = staticMetrics.executableOrigin,
+                    riskScore = evaluation.totalScore,
+                    riskLevel = evaluation.riskLevel.name,
+                    confidenceLevel = evaluation.confidenceLevel.name,
+                    riskReasoning = evaluation.reasoning,
+                    scoringChainJson = scoringChainSummary,
+                    signalsBreakdownJson = evaluation.signals.joinToString(" || ") { "${it.category.displayName}: ${it.name} (${if (it.isViolation) "VIOLATION" else "CLEAN"}, +${it.weight})" },
                     isSystemApp = isSystemApp,
+                    installTime = installTime,
+                    updateTime = updateTime,
+                    firstSeenTime = installTime,
                     permissionsJson = "${reqPerms.size} requested, ${grantedPerms.size} granted",
                     dangerousPermissionsJson = dangPerms.joinToString(", "),
+                    requestedPermissionsList = reqPerms.joinToString(", "),
+                    grantedPermissionsList = grantedPerms.joinToString(", "),
                     componentsJson = "Act: ${components.activitiesCount} (exp ${components.exportedActivities}), Svc: ${components.servicesCount} (exp ${components.exportedServices})",
                     staticMetricsJson = "Size: ${staticMetrics.apkSizeMb}MB, Dex: ${staticMetrics.dexCount}, Libs: ${staticMetrics.nativeLibsCount}",
                     mlMaliciousProb = rfProb,
@@ -380,7 +446,6 @@ class SecurityRepository(
             )
         })
 
-        // Remove any finding associated with this killed PID
         val currentFindings = database.findingDao().getAllFindings().first()
         val remaining = currentFindings.filter { !it.title.contains("PID $pid") }
         database.findingDao().clearFindings()
@@ -416,11 +481,22 @@ class SecurityRepository(
                     uid = 10189,
                     apkHash = "e89b21f8a4103c89b21c43f721a",
                     certHash = "9F:23:41:A2:81:7C",
-                    riskScore = 91,
+                    signerOrganization = "Unknown Sideload Signer",
+                    executableOrigin = "Embedded in APK + Unthrottled Worker",
+                    riskScore = 92,
                     riskLevel = "CRITICAL",
+                    confidenceLevel = "HIGH",
+                    riskReasoning = "Elevated critical threat due to corroborated severe CPU anomaly (88.5%) and unconstrained background persistence.",
+                    scoringChainJson = "#1 [Runtime]: Sustained 88.5% CPU (+40) -> #2 [Persistence]: Boot persistence (+20) -> Final Score: 92",
+                    signalsBreakdownJson = "Runtime: CPU Spike (VIOLATION, +40) || Static: Multidex (CLEAN, +0)",
                     isSystemApp = false,
+                    installTime = System.currentTimeMillis() - 86400000L * 3,
+                    updateTime = System.currentTimeMillis() - 86400000L,
+                    firstSeenTime = System.currentTimeMillis() - 86400000L * 3,
                     permissionsJson = "18 requested, 14 granted",
                     dangerousPermissionsJson = "WAKE_LOCK, SYSTEM_ALERT_WINDOW, RECEIVE_BOOT_COMPLETED",
+                    requestedPermissionsList = "android.permission.RECEIVE_BOOT_COMPLETED, android.permission.WAKE_LOCK, android.permission.INTERNET",
+                    grantedPermissionsList = "android.permission.RECEIVE_BOOT_COMPLETED, android.permission.INTERNET",
                     componentsJson = "Act: 2, Svc: 4 (exp 3)",
                     staticMetricsJson = "Size: 24.5MB, Dex: 4, Libs: 3 (libminer.so)",
                     mlMaliciousProb = 0.94,
@@ -443,19 +519,6 @@ class SecurityRepository(
                     remediation = "Kill process via Shizuku ADB shell and uninstall immediately.",
                     timestamp = System.currentTimeMillis()
                 )
-                val finding2 = FindingEntity(
-                    findingId = "fnd_miner_001",
-                    ruleId = "RULE-001",
-                    packageName = "com.sample.miner",
-                    appName = "QuickClean Optimizer",
-                    category = "Persistent Background Execution",
-                    severity = "HIGH",
-                    title = "Unrestricted Background Persistence",
-                    description = "Boot completion receiver initiates worker daemon on device reboot without user interaction.",
-                    evidence = "RECEIVE_BOOT_COMPLETED granted, 3 exported services active.",
-                    remediation = "Revoke autostart permissions in device settings.",
-                    timestamp = System.currentTimeMillis()
-                )
                 val findingProc = FindingEntity(
                     findingId = "fnd_proc_9814",
                     ruleId = "PROC-ANOMALY",
@@ -470,14 +533,14 @@ class SecurityRepository(
                     timestamp = System.currentTimeMillis()
                 )
 
-                database.findingDao().insertFindings(listOf(finding1, finding2, findingProc))
+                database.findingDao().insertFindings(listOf(finding1, findingProc))
 
                 database.behaviorEventDao().insertEvent(
                     BehaviorEventEntity(
                         eventId = "evt_${System.currentTimeMillis()}_miner",
                         packageName = "com.sample.miner",
                         appName = "QuickClean Optimizer",
-                        eventType = "RULE-002",
+                        eventType = "PROC_ANOMALY",
                         severity = "CRITICAL",
                         description = "Severe Cryptomining CPU Spike (88.5%)",
                         evidence = "Background CPU thread pegged at max frequency (PID 9814)",
@@ -493,16 +556,27 @@ class SecurityRepository(
                     uid = 10199,
                     apkHash = "12ab99014ffc189b2103f71c4",
                     certHash = "1A:87:C3:99:4E:02",
+                    signerOrganization = "Untrusted Third-Party Signer",
+                    executableOrigin = "Embedded in APK + C2 Socket",
                     riskScore = 88,
                     riskLevel = "CRITICAL",
+                    confidenceLevel = "HIGH",
+                    riskReasoning = "Critical threat: Application connects to blacklisted C2 remote port 4444 while accessing audio/location in background.",
+                    scoringChainJson = "#1 [Network]: C2 Socket port 4444 (+40) -> #2 [Permissions]: Dangerous Audio/Location (+20) -> Final Score: 88",
+                    signalsBreakdownJson = "Network: Port 4444 (VIOLATION, +40) || Permissions: Audio/Location (VIOLATION, +20)",
                     isSystemApp = false,
+                    installTime = System.currentTimeMillis() - 86400000L * 5,
+                    updateTime = System.currentTimeMillis() - 86400000L * 2,
+                    firstSeenTime = System.currentTimeMillis() - 86400000L * 5,
                     permissionsJson = "26 requested, 22 granted",
                     dangerousPermissionsJson = "ACCESS_FINE_LOCATION, RECORD_AUDIO, READ_SMS, READ_CALL_LOG, CAMERA",
+                    requestedPermissionsList = "android.permission.ACCESS_FINE_LOCATION, android.permission.RECORD_AUDIO, android.permission.READ_SMS",
+                    grantedPermissionsList = "android.permission.ACCESS_FINE_LOCATION, android.permission.RECORD_AUDIO",
                     componentsJson = "Act: 1, Svc: 3 (exp 2), Rec: 4",
                     staticMetricsJson = "Size: 4.8MB, Dex: 2, Libs: 1",
                     mlMaliciousProb = 0.91,
                     anomalyScore = 0.85,
-                    findingsCount = 3,
+                    findingsCount = 2,
                     lastScanned = System.currentTimeMillis()
                 )
                 database.applicationDao().insertApplications(listOf(spyApp))
@@ -537,20 +611,7 @@ class SecurityRepository(
                     remediation = "Disconnect network and quarantine application.",
                     timestamp = System.currentTimeMillis()
                 )
-                val procFinding = FindingEntity(
-                    findingId = "fnd_proc_7421",
-                    ruleId = "PROC-ANOMALY",
-                    packageName = "com.secret.tracker",
-                    appName = "com.secret.tracker:remote",
-                    category = "Privileged Process Anomaly",
-                    severity = "HIGH",
-                    title = "Suspicious Process: com.secret.tracker:remote (PID 7421)",
-                    description = "Background audio recording daemon with active C2 port 4444 socket.",
-                    evidence = "PID: 7421, Port 4444 socket active, User: u0_a199",
-                    remediation = "Terminate PID 7421 via Shizuku shell.",
-                    timestamp = System.currentTimeMillis()
-                )
-                database.findingDao().insertFindings(listOf(finding, procFinding))
+                database.findingDao().insertFindings(listOf(finding))
 
                 database.behaviorEventDao().insertEvent(
                     BehaviorEventEntity(
@@ -573,11 +634,22 @@ class SecurityRepository(
                     uid = 10204,
                     apkHash = "998241cf01934ba81230cd7",
                     certHash = "DE:AD:BE:EF:00:11",
+                    signerOrganization = "Unknown Sideload Signer",
+                    executableOrigin = "External Writable Storage (/sdcard/payload.dex)",
                     riskScore = 85,
                     riskLevel = "CRITICAL",
+                    confidenceLevel = "HIGH",
+                    riskReasoning = "Critical threat: ClassLoader invokes dynamic code execution targeting external world-writable storage (/sdcard/).",
+                    scoringChainJson = "#1 [DCL]: External Storage ClassLoader (+35) -> #2 [Entropy]: Encrypted Payload Container (+25) -> Final Score: 85",
+                    signalsBreakdownJson = "DCL: External Storage Loading (VIOLATION, +35) || Static: Obfuscated Wrapper (VIOLATION, +25)",
                     isSystemApp = false,
+                    installTime = System.currentTimeMillis() - 86400000L * 7,
+                    updateTime = System.currentTimeMillis() - 86400000L * 4,
+                    firstSeenTime = System.currentTimeMillis() - 86400000L * 7,
                     permissionsJson = "12 requested, 10 granted",
                     dangerousPermissionsJson = "SYSTEM_ALERT_WINDOW, REQUEST_INSTALL_PACKAGES",
+                    requestedPermissionsList = "android.permission.REQUEST_INSTALL_PACKAGES, android.permission.SYSTEM_ALERT_WINDOW",
+                    grantedPermissionsList = "android.permission.SYSTEM_ALERT_WINDOW",
                     componentsJson = "Act: 1, Svc: 2",
                     staticMetricsJson = "Size: 18.2MB, Dex: 5, Dynamic Code: YES",
                     mlMaliciousProb = 0.89,
@@ -592,12 +664,12 @@ class SecurityRepository(
                     ruleId = "RULE-005",
                     packageName = "com.fake.flashtorch",
                     appName = "Flashlight SuperBright",
-                    category = "Dynamic Code Loading / Dex Injection",
+                    category = "Dynamic Code Loading & Payload Inspection",
                     severity = "CRITICAL",
-                    title = "Dynamic Secondary Payload Unpacked",
-                    description = "Detected encrypted secondary DEX loaded into Dalvik runtime via DexClassLoader.",
-                    evidence = "Secondary DEX container detected in /assets/payload.dex",
-                    remediation = "Uninstall application; violates Google Play policy against dynamic execution.",
+                    title = "Untrusted Dynamic Executable Origin",
+                    description = "Detected ClassLoader referencing external world-writable storage (/sdcard/payload.dex).",
+                    evidence = "Secondary DEX container loaded from /sdcard/payload.dex",
+                    remediation = "Uninstall application; dynamic code loading from shared storage violates Android security boundaries.",
                     timestamp = System.currentTimeMillis()
                 )
                 database.findingDao().insertFindings(listOf(finding))
@@ -609,8 +681,8 @@ class SecurityRepository(
                         appName = "Flashlight SuperBright",
                         eventType = "RULE-005",
                         severity = "CRITICAL",
-                        description = "Secondary dex payload loaded into memory",
-                        evidence = "DexClassLoader invoked with assets/payload.dex",
+                        description = "Secondary dex payload loaded from shared storage",
+                        evidence = "DexClassLoader invoked with /sdcard/payload.dex",
                         timestamp = System.currentTimeMillis()
                     )
                 )
@@ -623,6 +695,8 @@ class SecurityRepository(
             PackageInfo().apply {
                 packageName = "com.android.chrome"
                 versionName = "128.0.6613.88"
+                firstInstallTime = System.currentTimeMillis() - 86400000L * 30
+                lastUpdateTime = System.currentTimeMillis() - 86400000L * 5
                 applicationInfo = ApplicationInfo().apply {
                     flags = ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_INSTALLED
                     uid = 10145
@@ -631,6 +705,8 @@ class SecurityRepository(
             PackageInfo().apply {
                 packageName = "com.google.android.youtube"
                 versionName = "19.34.42"
+                firstInstallTime = System.currentTimeMillis() - 86400000L * 25
+                lastUpdateTime = System.currentTimeMillis() - 86400000L * 2
                 applicationInfo = ApplicationInfo().apply {
                     flags = ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_INSTALLED
                     uid = 10150

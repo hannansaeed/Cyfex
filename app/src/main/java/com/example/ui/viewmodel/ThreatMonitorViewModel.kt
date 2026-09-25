@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ThreatMonitorApp
 import com.example.data.db.entity.*
+import com.example.data.model.AppLiveUsage
 import com.example.data.model.DeviceTelemetryInfo
 import com.example.service.MonitoringService
 import com.example.shizuku.ShizukuStatus
@@ -40,6 +41,17 @@ class ThreatMonitorViewModel(application: Application) : AndroidViewModel(applic
     val latestScan: StateFlow<ScanEntity?> = repository.latestScan
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    // Dynamic Live Resource Usage updating every 1.5s
+    val liveUsage: StateFlow<List<AppLiveUsage>> = repository.liveUsage
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // 24-Hour Sensor and Hardware Access Audit Events
+    val sensorAccessEvents: StateFlow<List<SensorAccessEventEntity>> = repository.sensorAccessEvents
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val activeMonitoringSession: StateFlow<MonitoringSessionEntity?> = repository.activeMonitoringSession
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     private val _deviceInfo = MutableStateFlow(repository.getDeviceInfo())
     val deviceInfo: StateFlow<DeviceTelemetryInfo> = _deviceInfo.asStateFlow()
 
@@ -48,6 +60,21 @@ class ThreatMonitorViewModel(application: Application) : AndroidViewModel(applic
 
     private val _selectedAppForDetail = MutableStateFlow<ApplicationEntity?>(null)
     val selectedAppForDetail: StateFlow<ApplicationEntity?> = _selectedAppForDetail.asStateFlow()
+
+    private val _isDebugModeEnabled = MutableStateFlow(false)
+    val isDebugModeEnabled: StateFlow<Boolean> = _isDebugModeEnabled.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            repository.activeMonitoringSession.collectLatest { session ->
+                _isServiceActive.value = session?.isRunning == true
+            }
+        }
+    }
+
+    fun toggleDebugMode() {
+        _isDebugModeEnabled.value = !_isDebugModeEnabled.value
+    }
 
     fun selectApp(app: ApplicationEntity?) {
         _selectedAppForDetail.value = app
@@ -93,6 +120,34 @@ class ThreatMonitorViewModel(application: Application) : AndroidViewModel(applic
             MonitoringService.startService(context)
         } else {
             MonitoringService.stopService(context)
+        }
+    }
+
+    fun refreshSensorAccessAudit() {
+        viewModelScope.launch {
+            repository.foregroundMonitorCollector.auditAndLogSensorAccesses()
+        }
+    }
+
+    fun logDirectHardwareProbe(resourceType: String, appName: String, pkg: String) {
+        viewModelScope.launch {
+            repository.foregroundMonitorCollector.recordRealtimeSensorAccess(
+                targetPkg = pkg,
+                resourceType = resourceType,
+                details = "$resourceType hardware access session logged via direct probe"
+            )
+        }
+    }
+
+    fun populateSampleSensorAccessLogs() {
+        viewModelScope.launch {
+            repository.populateSampleSensorAccessLogs()
+        }
+    }
+
+    fun clearAccessLogs() {
+        viewModelScope.launch {
+            repository.clearSensorAccessEvents()
         }
     }
 }

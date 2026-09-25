@@ -24,7 +24,6 @@ class ShellExecutor(private val shizukuManager: ShizukuManager) {
     private val cacheTtlMs = 2500L
 
     suspend fun execute(command: String): ShellResult = withContext(Dispatchers.IO) {
-        // Return cached result if recent to avoid repetitive executions
         val now = SystemClock.elapsedRealtime()
         val cached = resultCache[command]
         if (cached != null && (now - cached.first) < cacheTtlMs) {
@@ -34,37 +33,28 @@ class ShellExecutor(private val shizukuManager: ShizukuManager) {
         val isPrivileged = shizukuManager.hasPermission()
         if (isPrivileged) {
             try {
-                val newProcessMethod = try {
-                    Shizuku::class.java.getDeclaredMethod(
-                        "newProcess",
-                        Array<String>::class.java,
-                        Array<String>::class.java,
-                        String::class.java
-                    ).apply { isAccessible = true }
-                } catch (e: Exception) {
-                    null
-                }
+                val newProcessMethod = Shizuku::class.java.getDeclaredMethod(
+                    "newProcess",
+                    Array<String>::class.java,
+                    Array<String>::class.java,
+                    String::class.java
+                ).apply { isAccessible = true }
 
-                if (newProcessMethod != null) {
-                    val process = newProcessMethod.invoke(null, arrayOf("sh", "-c", command), null, null) as java.lang.Process
-                    val stdoutReader = BufferedReader(InputStreamReader(process.inputStream))
-                    val stderrReader = BufferedReader(InputStreamReader(process.errorStream))
+                val process = newProcessMethod.invoke(null, arrayOf("sh", "-c", command), null, null) as java.lang.Process
+                val stdout = process.inputStream.bufferedReader().readText()
+                val stderr = process.errorStream.bufferedReader().readText()
+                val exitCode = process.waitFor()
 
-                    val stdout = stdoutReader.readText()
-                    val stderr = stderrReader.readText()
-                    val exitCode = process.waitFor()
-
-                    val result = ShellResult(
-                        exitCode = exitCode,
-                        stdout = stdout,
-                        stderr = stderr,
-                        isPrivilegedShizuku = true
-                    )
-                    resultCache[command] = Pair(now, result)
-                    return@withContext result
-                }
-            } catch (e: Throwable) {
-                // Log once and safely fall back
+                val result = ShellResult(
+                    exitCode = exitCode,
+                    stdout = stdout,
+                    stderr = stderr,
+                    isPrivilegedShizuku = true
+                )
+                resultCache[command] = Pair(now, result)
+                return@withContext result
+            } catch (t: Throwable) {
+                Log.e(TAG, "Shizuku privileged execution error: ${t.message}")
             }
         }
 

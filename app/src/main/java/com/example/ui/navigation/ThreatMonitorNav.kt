@@ -31,9 +31,11 @@ import com.example.ui.behavior.BehaviorScreen
 import com.example.ui.dashboard.DashboardScreen
 import com.example.ui.findings.FindingsScreen
 import com.example.ui.metrics.*
+import com.example.ui.monitoring.ForegroundMonitoringScreen
 import com.example.ui.processes.ProcessesScreen
 import com.example.ui.settings.SettingsScreen
 import com.example.ui.theme.*
+import com.example.ui.usage.AppUsageScreen
 import com.example.ui.viewmodel.ThreatMonitorViewModel
 import kotlinx.coroutines.launch
 
@@ -46,6 +48,8 @@ enum class MainScreen(val title: String, val icon: ImageVector) {
 }
 
 enum class DrawerScreen(val title: String, val icon: ImageVector) {
+    FOREGROUND_MONITORING("Foreground Monitor", Icons.Default.Security),
+    USAGE("App Usage", Icons.Default.DataUsage),
     TIMELINE("Timeline", Icons.Default.Timeline),
     CPU("CPU", Icons.Default.Memory),
     RAM("RAM", Icons.Default.Storage),
@@ -67,8 +71,6 @@ fun ThreatMonitorNavHost(
     var currentDrawerScreen by remember { mutableStateOf<DrawerScreen?>(null) }
 
     // Right-side Drawer Navigation:
-    // Outer RTL layout direction places the drawer on the right edge,
-    // inner LTR layout direction maintains normal left-to-right text reading.
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         ModalNavigationDrawer(
             drawerState = drawerState,
@@ -108,7 +110,7 @@ fun ThreatMonitorNavHost(
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Text(
-                                        text = "v1.0.0 • Threat Telemetry",
+                                        text = "v${com.example.BuildConfig.VERSION_NAME} • Threat Telemetry",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.primary,
                                         fontSize = 11.sp
@@ -119,7 +121,7 @@ fun ThreatMonitorNavHost(
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // Drawer Navigation Items (Clean concise names)
+                        // Drawer Navigation Items
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -219,7 +221,6 @@ fun ThreatMonitorNavHost(
                                     )
                                 }
 
-                                // Three Bars on the top-right opens the Right-Hand Drawer
                                 IconButton(
                                     onClick = {
                                         scope.launch {
@@ -287,6 +288,8 @@ fun ThreatMonitorNavHost(
                     ) {
                         if (currentDrawerScreen != null) {
                             when (currentDrawerScreen) {
+                                DrawerScreen.FOREGROUND_MONITORING -> ForegroundMonitoringScreen(viewModel = viewModel)
+                                DrawerScreen.USAGE -> AppUsageScreen(viewModel = viewModel)
                                 DrawerScreen.TIMELINE -> BehaviorScreen(viewModel = viewModel)
                                 DrawerScreen.CPU -> CpuUsageScreen(viewModel = viewModel)
                                 DrawerScreen.RAM -> RamUsageScreen(viewModel = viewModel)

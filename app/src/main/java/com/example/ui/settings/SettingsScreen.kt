@@ -169,6 +169,14 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.primary,
                 onClick = { viewModel.injectTestScenario("DEX_INJECTION") }
             )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            SimulationButton(
+                title = "Populate Sample Sensor Access Logs",
+                subtitle = "Inserts 24-hour sample hardware access telemetry (Camera, Mic, Location) into Foreground Monitor",
+                color = Color(0xFF00B0FF),
+                onClick = { viewModel.populateSampleSensorAccessLogs() }
+            )
 
             Spacer(modifier = Modifier.height(20.dp))
         }
@@ -197,6 +205,32 @@ fun SettingsScreen(
                     DetailRow("Security Patch", deviceInfo.securityPatchLevel)
                     DetailRow("Wireless Debugging", if (deviceInfo.isWirelessDebuggingSupported) "Supported (Android 11+)" else "Requires USB ADB")
                     DetailRow("Shizuku Status", shizukuStatus.title)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            Text(
+                text = "APPLICATION SPECIFICATION",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary,
+                letterSpacing = 1.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    DetailRow("App Name", "Cyfex")
+                    DetailRow("Package ID", "com.cyfex.cat")
+                    DetailRow("Version Name", com.example.BuildConfig.VERSION_NAME)
+                    DetailRow("Version Code", com.example.BuildConfig.VERSION_CODE.toString())
+                    DetailRow("Build Signature", "Android 14+ / API 36 Ready")
                 }
             }
         }

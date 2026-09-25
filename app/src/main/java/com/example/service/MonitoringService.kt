@@ -7,8 +7,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.ThreatMonitorApp
@@ -26,18 +28,63 @@ class MonitoringService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
+        try {
+            createNotificationChannel()
+        } catch (e: Throwable) {
+            Log.e("MonitoringService", "Failed to create notification channel", e)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP_MONITORING) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            serviceScope.launch {
+                try {
+                    val repo = (application as ThreatMonitorApp).repository
+                    repo.setMonitoringSessionState(false)
+                    repo.foregroundMonitorCollector.stopRealtimeHardwareListeners()
+                } catch (e: Throwable) {
+                    Log.e("MonitoringService", "Error stopping monitoring session", e)
+                }
+            }
+            try {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            } catch (e: Throwable) {
+                stopSelf()
+            }
             return START_NOT_STICKY
         }
 
-        val notification = buildMonitoringNotification("Cyfex: Real-time Behavioral Protection Active")
-        startForeground(NOTIFICATION_ID, notification)
+        try {
+            createNotificationChannel()
+            val notification = buildMonitoringNotification("Cyfex: Active Foreground Telemetry & Sensor Audit")
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                try {
+                    startForeground(
+                        NOTIFICATION_ID,
+                        notification,
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                    )
+                } catch (e: Throwable) {
+                    startForeground(NOTIFICATION_ID, notification)
+                }
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: Throwable) {
+            Log.e("MonitoringService", "startForeground failed safely", e)
+        }
+
+        serviceScope.launch {
+            try {
+                val repo = (application as ThreatMonitorApp).repository
+                repo.setMonitoringSessionState(true)
+                repo.foregroundMonitorCollector.startRealtimeHardwareListeners()
+            } catch (e: Throwable) {
+                Log.e("MonitoringService", "Error initializing listeners", e)
+            }
+        }
 
         startPeriodicMonitoring()
         return START_STICKY
@@ -47,18 +94,25 @@ class MonitoringService : Service() {
         monitorJob?.cancel()
         monitorJob = serviceScope.launch {
             while (isActive) {
-                delay(45_000L) // Check every 45 seconds
                 try {
                     val repo = (application as ThreatMonitorApp).repository
-                    // Quick process check
+
+                    // 1. Audit and log hardware/sensor accesses safely
+                    repo.foregroundMonitorCollector.auditAndLogSensorAccesses()
+
+                    // 2. High CPU anomaly detection
                     val procs = repo.processCollector.collectProcesses()
                     val criticalProc = procs.firstOrNull { it.cpuPercent > 80.0 }
                     if (criticalProc != null) {
-                        notifyAnomaly("High CPU Anomaly Detected", "${criticalProc.processName} consuming ${"%.1f".format(criticalProc.cpuPercent)}% CPU")
+                        notifyAnomaly(
+                            "High CPU Anomaly Detected",
+                            "${criticalProc.processName} consuming ${"%.1f".format(criticalProc.cpuPercent)}% CPU"
+                        )
                     }
-                } catch (e: Exception) {
-                    // Log and continue
+                } catch (e: Throwable) {
+                    Log.w("MonitoringService", "Periodic monitoring check error", e)
                 }
+                delay(15_000L) // Check every 15 seconds
             }
         }
     }
@@ -82,7 +136,7 @@ class MonitoringService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Cyfex Security Bridge")
+            .setContentTitle("Cyfex Active Monitoring")
             .setContentText(contentText)
             .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
             .setContentIntent(pendingIntent)
@@ -93,15 +147,19 @@ class MonitoringService : Service() {
     }
 
     private fun notifyAnomaly(title: String, message: String) {
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setSmallIcon(android.R.drawable.stat_notify_error)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-            .build()
-        notificationManager.notify(ANOMALY_NOTIFICATION_ID, notification)
+        try {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setSmallIcon(android.R.drawable.stat_notify_error)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .build()
+            notificationManager.notify(ANOMALY_NOTIFICATION_ID, notification)
+        } catch (e: Throwable) {
+            Log.e("MonitoringService", "Failed to notify anomaly", e)
+        }
     }
 
     private fun createNotificationChannel() {
@@ -120,6 +178,15 @@ class MonitoringService : Service() {
 
     override fun onDestroy() {
         monitorJob?.cancel()
+        serviceScope.launch {
+            try {
+                val repo = (application as ThreatMonitorApp).repository
+                repo.setMonitoringSessionState(false)
+                repo.foregroundMonitorCollector.stopRealtimeHardwareListeners()
+            } catch (e: Throwable) {
+                // Ignore
+            }
+        }
         super.onDestroy()
     }
 
@@ -132,19 +199,27 @@ class MonitoringService : Service() {
         const val ACTION_STOP_MONITORING = "com.example.threatmonitor.ACTION_STOP"
 
         fun startService(context: Context) {
-            val intent = Intent(context, MonitoringService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                val intent = Intent(context, MonitoringService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Throwable) {
+                Log.e("MonitoringService", "startService failed", e)
             }
         }
 
         fun stopService(context: Context) {
-            val intent = Intent(context, MonitoringService::class.java).apply {
-                action = ACTION_STOP_MONITORING
+            try {
+                val intent = Intent(context, MonitoringService::class.java).apply {
+                    action = ACTION_STOP_MONITORING
+                }
+                context.startService(intent)
+            } catch (e: Throwable) {
+                Log.e("MonitoringService", "stopService failed", e)
             }
-            context.startService(intent)
         }
     }
 }

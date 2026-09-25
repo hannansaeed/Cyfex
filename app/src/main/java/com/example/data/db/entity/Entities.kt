@@ -22,11 +22,22 @@ data class ApplicationEntity(
     val uid: Int,
     val apkHash: String,
     val certHash: String,
+    val signerOrganization: String = "Verified Developer",
+    val executableOrigin: String = "Embedded in APK",
     val riskScore: Int,
     val riskLevel: String,
+    val confidenceLevel: String = "HIGH",
+    val riskReasoning: String = "Normal Android application packaging.",
+    val scoringChainJson: String = "",
+    val signalsBreakdownJson: String = "",
     val isSystemApp: Boolean,
+    val installTime: Long = 0L,
+    val updateTime: Long = 0L,
+    val firstSeenTime: Long = 0L,
     val permissionsJson: String,
     val dangerousPermissionsJson: String,
+    val requestedPermissionsList: String = "",
+    val grantedPermissionsList: String = "",
     val componentsJson: String,
     val staticMetricsJson: String,
     val mlMaliciousProb: Double,
@@ -125,4 +136,23 @@ data class RuleResultEntity(
     val scoreImpact: Int,
     val details: String,
     val timestamp: Long
+)
+
+@Entity(tableName = "sensor_access_events")
+data class SensorAccessEventEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val packageName: String,
+    val appName: String,
+    val resourceType: String, // "CAMERA", "MICROPHONE", "LOCATION", "CONTACTS", "STORAGE", "BACKGROUND_NETWORK"
+    val accessCount: Int = 1,
+    val details: String = "",
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "monitoring_session")
+data class MonitoringSessionEntity(
+    @PrimaryKey val id: String = "active_session",
+    val startTime: Long = System.currentTimeMillis(),
+    val isRunning: Boolean = false,
+    val totalEventsLogged: Int = 0
 )

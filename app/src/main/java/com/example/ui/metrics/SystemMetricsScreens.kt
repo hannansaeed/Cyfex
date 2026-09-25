@@ -3,6 +3,7 @@ package com.example.ui.metrics
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -23,12 +24,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.ui.components.DetailRow
 import com.example.ui.theme.DisplayMode
 import com.example.ui.theme.LocalThemeConfig
@@ -782,7 +786,7 @@ fun AboutScreen() {
                     .fillMaxWidth()
                     .clickable {
                         try {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com"))
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/hannansaeed"))
                             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             context.startActivity(intent)
                         } catch (e: Exception) {
@@ -794,44 +798,33 @@ fun AboutScreen() {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_developer_avatar_1790327844134),
+                        contentDescription = "Hannan Saeed",
+                        contentScale = ContentScale.Crop,
                         modifier = Modifier
-                            .size(44.dp)
+                            .size(46.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.Code,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
+                    )
                     Spacer(modifier = Modifier.width(14.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Cyfex Security Team",
+                            text = "Hannan Saeed",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "https://github.com • Tap to open profile",
+                            text = "Tap to open profile",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary,
                             fontSize = 11.sp
                         )
                     }
-                    Icon(
-                        Icons.AutoMirrored.Filled.OpenInNew,
-                        contentDescription = "Open GitHub",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
                 }
             }
 
@@ -856,8 +849,8 @@ fun AboutScreen() {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    DetailRow("Version", "1.0.0-release")
-                    DetailRow("Version Code", "100")
+                    DetailRow("Version", "${com.example.BuildConfig.VERSION_NAME}-release")
+                    DetailRow("Version Code", com.example.BuildConfig.VERSION_CODE.toString())
                     DetailRow("Build Type", "Release / Privileged Shizuku")
                     DetailRow("Git Commit Hash", "a9f4c21b903e")
                     DetailRow("Target SDK", "Android 15 (API 35)")
