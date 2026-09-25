@@ -1,0 +1,6 @@
+{
+  "name": "Cyfex",
+  "description": "Cyfex - Mobile-only Android threat monitoring and security platform using authorized Shizuku telemetry, behavioral analysis, and explainable risk scoring.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
